@@ -17,10 +17,7 @@
 #ifndef _PG_RXTX_H
 #define _PG_RXTX_H
 
-struct pg_rxtx_packet {
-	uint8_t *data;
-	uint16_t *len;
-};
+struct pg_rxtx_packet;
 
 /**
  * The rx callback is called each time packets flow to brick.
@@ -42,14 +39,16 @@ typedef void (*pg_rxtx_rx_callback_t)(struct pg_brick *brick,
  *
  * @param	brick pointer to the rxtx brick
  * @param	tx_burst array of pre-allocated packets.
- *		You can write packets here but once the callback end, you
- *		should not touch packet anymore.
- *		See PG_RXTX_MAX_TX_BURST_LEN and PG_RXTX_MAX_TX_PACKET_LEN
- *		Note that that you will get back the same burst pointer at each
- *		burst so you can get advantage of this to only write what you
- *		need.
+ *              The array size if given with tx_burst_len.
+ *              Use pg_rxtx_packet_data to get a pointer where to write data.
+ *              Use pg_rxtx_packet_set_len to set len of your packet.
+ *              You must not write data after PG_RXTX_MAX_TX_PACKET_LEN.
+ *		You must not write data once callback is done.
+ *		Note that that you will get back the same packet array at each call.
+ *		You can get advantage of this to only write what you need to.
+ * @param	rx_burst_len number of packets ready to be sent.
+ *              Must not be > PG_RXTX_MAX_TX_BURST_LEN
  * @param	private_data give back user's data
- * @param	rx_burst_len number of packets ready to be sent
  */
 typedef void (*pg_rxtx_tx_callback_t)(struct pg_brick *brick,
 				      struct pg_rxtx_packet *tx_burst,
@@ -60,6 +59,33 @@ typedef void (*pg_rxtx_tx_callback_t)(struct pg_brick *brick,
 #define PG_RXTX_MAX_TX_BURST_LEN 64
 /* maximal packet lenght user can write. */
 #define PG_RXTX_MAX_TX_PACKET_LEN 1500
+
+/**
+ * Get pointer to packet's data.
+ * Do not write more than PG_RXTX_MAX_TX_PACKET_LEN.
+ * Update packet's len with pg_rxtx_packet_set_len.
+ *
+ * @param	packet's pointer
+ * @return	pointer to data where to write
+ */
+void *pg_rxtx_packet_data(struct pg_rxtx_packet *packet);
+
+/**
+ * Set len of a packet
+ *
+ * @param	packet pointer to a packet
+ * @param	len len must be <= PG_RXTX_MAX_TX_PACKET_LEN
+ */
+void pg_rxtx_packet_set_len(struct pg_rxtx_packet *packet, uint32_t len);
+
+/**
+ * Get len of a packet
+ *
+ * @param	packet pointer to a packet
+ * @return	packet's len
+ */
+uint32_t pg_rxtx_packet_len(struct pg_rxtx_packet *packet);
+
 
 /**
  * Create a new rxtx brick (monopole).

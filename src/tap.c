@@ -95,7 +95,7 @@ static int tap_burst(struct pg_brick *brick, enum pg_side from,
 		pg_low_bit_iterate(it_mask, i);
 		struct rte_mbuf *packet = pkts[i];
 		char *data = rte_pktmbuf_mtod(packet, char *);
-		int len = rte_pktmbuf_pkt_len(packet);
+		int len = rte_pktmbuf_data_len(packet);
 
 		/* write data. */
 		if (unlikely(write(fd, data, len) < 0)) {

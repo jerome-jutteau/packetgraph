@@ -90,7 +90,7 @@ static void check_help(int argc, char **argv)
 int main(int argc, char **argv)
 {
 	struct pg_error *error = NULL;
-	int ret = -1;
+	int ret;
 	struct pg_brick *nic, *burster;
 	struct pg_graph *graph;
 	static struct packet pkt;
@@ -104,11 +104,10 @@ int main(int argc, char **argv)
 	pkt.ip.ihl = 5;
 	pkt.ip.version = 4;
 	pkt.ip.protocol = IPPROTO_UDP;
-	pkt.ip.tot_len = htons(DATA_LEN);
+	pkt.ip.tot_len = htons(DATA_LEN + sizeof(struct iphdr));
 
 	argc -= ret + 1;
 	argv += ret + 1;
-	ret = 1;
 	while (argc > 0) {
 		if (g_str_equal(argv[0], "--sip")) {
 			if (argc < 2) {
@@ -177,6 +176,7 @@ int main(int argc, char **argv)
 	}
 
 	nic = pg_nic_new_by_id("port 0", 0, &error);
+	//nic = pg_tap_new("tap", NULL, &error);
 	CHECK_ERROR(error);
 	burster = pg_rxtx_new("tx", NULL, &tx_callback, (void *) &pkt);
 	pg_brick_link(nic, burster, &error);
@@ -185,12 +185,13 @@ int main(int argc, char **argv)
 	CHECK_ERROR(error);
 
 	printf("let's burst packets !\n");
-	while (42)
-		if (pg_graph_poll(graph, &error) < 0)
+	while (42) {
+		if (pg_graph_poll(graph, &error) < 0) {
+			CHECK_ERROR(error);
 			break;
-	CHECK_ERROR(error);
-	ret = 0;
+		}
+	}
 exit:
 	pg_stop();
-	return ret;
+	return 1;
 }

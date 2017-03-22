@@ -28,6 +28,8 @@ struct pg_rxtx_config {
 	pg_rxtx_tx_callback_t tx;
 };
 
+typedef rte_mbuf pg_rxtx_packet
+
 struct pg_rxtx_state {
 	struct pg_brick brick;
 	/* packet graph internal side */
@@ -75,9 +77,7 @@ static int rxtx_burst(struct pg_brick *brick, enum pg_side from,
 	it_mask = pkts_mask;
 	for (; it_mask;) {
 		pg_low_bit_iterate(it_mask, i);
-		tmp = pkts[i];
-		rx_burst[cnt].data = rte_pktmbuf_mtod(tmp, uint8_t *);
-		rx_burst[cnt].len = &tmp->data_len;
+		rx_burst[cnt] = rte_pktmbuf_mtod(tmp, uint8_t *);
 		cnt++;
 	}
 
@@ -187,6 +187,11 @@ struct pg_brick *pg_rxtx_new(const char *name,
 void *pg_rxtx_private_data(struct pg_brick *brick)
 {
 	return pg_brick_get_state(brick, struct pg_rxtx_state)->private_data;
+}
+
+void pg_rxtx_packet_set_len(struct pg_rxtx_packet *packet, uint16_t len)
+{
+	XXX
 }
 
 static void rxtx_link(struct pg_brick *brick, enum pg_side side, int edge)
