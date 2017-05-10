@@ -33,6 +33,7 @@
 #include <rte_ip.h>
 #include <rte_udp.h>
 #include <rte_tcp.h>
+#include <rte_cycles.h>
 
 #include <packetgraph/packetgraph.h>
 #include "brick-int.h"
@@ -65,6 +66,8 @@ struct pg_vhost_state {
 	struct rte_mbuf *out[PG_MAX_PKTS_BURST];
 	rte_atomic64_t tx_bytes; /* TX: [vhost] --> VM */
 	rte_atomic64_t rx_bytes; /* RX: [vhost] <-- VM */
+	uint64_t poll_timer_cycles_per_poll;
+	uint64_t poll_timer_next;
 };
 
 /* head of the socket list */
@@ -143,8 +146,13 @@ static int vhost_poll(struct pg_brick *brick, uint16_t *pkts_cnt,
 	int ret;
 	struct rte_mbuf **in = state->in;
 	uint64_t rx_bytes = 0;
+	uint64_t time = rte_get_timer_cycles();
 
 	*pkts_cnt = 0;
+	if (likely(time < state->poll_timer_next))
+		return 0;
+	state->poll_timer_next = time + state->poll_timer_cycles_per_poll;
+
 	/* Try lock */
 	if (unlikely(!rte_atomic32_test_and_set(&state->allow_queuing)))
 		return 0;
@@ -261,6 +269,15 @@ static int vhost_init(struct pg_brick *brick, struct pg_brick_config *config,
 	rte_atomic32_init(&state->allow_queuing);
 	rte_atomic32_set(&state->allow_queuing, 1);
 
+	/* poll frequency is based on:
+	 * - we are making packets of 1500 bytes
+	 * - we can read 32 packets per burst
+	 * - minimal poll rate is based on 10Gbit/s
+	 */
+	state->poll_timer_cycles_per_poll =
+		rte_get_timer_hz() * (1500 * 8 * 32) / (10e9);
+	state->poll_timer_next = rte_get_timer_cycles() +
+		state->poll_timer_cycles_per_poll;
 	return 0;
 }
 
