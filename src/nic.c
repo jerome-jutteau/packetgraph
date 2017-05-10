@@ -248,7 +248,9 @@ static int nic_poll(struct pg_brick *brick, uint16_t *pkts_cnt,
 	struct rte_mbuf **pkts = state->pkts;
 	uint64_t time = rte_get_timer_cycles();
 
+	static uint64_t lol_timer;
 	if (likely(time < state->poll_timer_next)) {
+		lol_timer++;
 		*pkts_cnt = 0;
 		return 0;
 	}
@@ -256,6 +258,17 @@ static int nic_poll(struct pg_brick *brick, uint16_t *pkts_cnt,
 
 	nb_pkts = rte_eth_rx_burst(state->portid, 0,
 				   state->pkts, PG_MAX_PKTS_BURST);
+
+	static uint64_t lol_count;
+	static uint64_t lol_burst_size_mean;
+	lol_burst_size_mean += nb_pkts;
+	if (++lol_count == 30000) {
+		printf("NIC POLL MEAN: %lf\n", lol_burst_size_mean / (lol_count * 1.0));
+		printf("NIC NOP: %lf\n", lol_timer / (lol_count * 1.0));
+		lol_count = 0;
+		lol_burst_size_mean = 0;
+		lol_timer = 0;
+	}
 
 	if (!nb_pkts) {
 		*pkts_cnt = 0;
