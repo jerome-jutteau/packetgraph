@@ -21,6 +21,7 @@
 #include <rte_ip.h>
 #include <rte_udp.h>
 #include <rte_tcp.h>
+#include <rte_cycles.h>
 
 #include <rte_cycles.h>
 #include <net/if.h>
@@ -46,6 +47,8 @@ struct pg_nic_state {
 	struct pg_brick brick;
 	struct rte_mbuf *pkts[PG_MAX_PKTS_BURST];
 	struct rte_mbuf *exit_pkts[PG_MAX_PKTS_BURST];
+	uint64_t poll_timer_cycles_per_poll;
+	uint64_t poll_timer_next;
 	uint8_t portid;
 	/* side of the physical NIC/PMD */
 	enum pg_side output;
@@ -243,9 +246,17 @@ static int nic_poll(struct pg_brick *brick, uint16_t *pkts_cnt,
 	struct pg_nic_state *state =
 		pg_brick_get_state(brick, struct pg_nic_state);
 	struct rte_mbuf **pkts = state->pkts;
+	uint64_t time = rte_get_timer_cycles();
+
+	if (likely(time < state->poll_timer_next)) {
+		*pkts_cnt = 0;
+		return 0;
+	}
+	state->poll_timer_next = time + state->poll_timer_cycles_per_poll;
 
 	nb_pkts = rte_eth_rx_burst(state->portid, 0,
 				   state->pkts, PG_MAX_PKTS_BURST);
+
 	if (!nb_pkts) {
 		*pkts_cnt = 0;
 		return 0;
@@ -322,6 +333,7 @@ static int nic_init(struct pg_brick *brick, struct pg_brick_config *config,
 	struct pg_nic_state *state;
 	struct pg_nic_config *nic_config;
 	struct rte_eth_txq_info qinfo;
+	struct rte_eth_link link;
 	int ret;
 
 	state = pg_brick_get_state(brick, struct pg_nic_state);
@@ -356,6 +368,19 @@ static int nic_init(struct pg_brick *brick, struct pg_brick_config *config,
 		return -1;
 	}
 	rte_eth_promiscuous_enable(state->portid);
+
+	/* poll frequency is based on:
+	 * - we are making packets of 1500 bytes
+	 * - we can read 32 packets per burst
+	 * - poll rate is based on port's speed
+	 */
+	rte_eth_link_get(state->portid, &link);
+	if (link.link_speed == 0)
+		link.link_speed = ETH_SPEED_NUM_10G;
+	state->poll_timer_cycles_per_poll =
+		rte_get_timer_hz() * (1500  * 8 * 32) / (link.link_speed * 1e6);
+	state->poll_timer_next = rte_get_timer_cycles() +
+		state->poll_timer_cycles_per_poll;
 
 	/* check if nic supports offloading */
 	if (rte_eth_tx_queue_info_get(state->portid, 0, &qinfo) == 0 &&
