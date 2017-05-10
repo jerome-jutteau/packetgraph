@@ -149,8 +149,11 @@ static int vhost_poll(struct pg_brick *brick, uint16_t *pkts_cnt,
 	uint64_t time = rte_get_timer_cycles();
 
 	*pkts_cnt = 0;
-	if (likely(time < state->poll_timer_next))
+	static uint64_t lol_timer;
+	if (likely(time < state->poll_timer_next)) {
+		lol_timer++;
 		return 0;
+	}
 	state->poll_timer_next = time + state->poll_timer_cycles_per_poll;
 
 	/* Try lock */
@@ -164,6 +167,17 @@ static int vhost_poll(struct pg_brick *brick, uint16_t *pkts_cnt,
 	count = rte_vhost_dequeue_burst(virtio_net, VIRTIO_TXQ, mp, in,
 					MAX_BURST);
 	*pkts_cnt = count;
+
+	static uint64_t lol_count;
+	static uint64_t lol_burst_size_mean;
+	lol_burst_size_mean += count;
+	if (++lol_count == 30000) {
+		printf("VHOST POLL MEAN: %lf\n", lol_burst_size_mean / (lol_count * 1.0));
+		printf("VHOST NOP: %lf\n", lol_timer / (lol_count * 1.0));
+		lol_count = 0;
+		lol_burst_size_mean = 0;
+		lol_timer = 0;
+	}
 
 	rte_atomic32_clear(&state->allow_queuing);
 	if (!count)
