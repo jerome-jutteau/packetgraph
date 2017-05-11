@@ -8,6 +8,7 @@ libpacketgraph_la_SOURCES = \
 	src/printer.c\
 	src/packet.c\
 	src/packets.c\
+	src/limiter.c\
 	src/lifecycle.c\
 	src/nop.c\
 	src/utils/mempool.c\
