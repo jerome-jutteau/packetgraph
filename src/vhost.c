@@ -37,6 +37,7 @@
 #include <packetgraph/packetgraph.h>
 #include "brick-int.h"
 #include "packets.h"
+#include "limiter.h"
 #include "utils/bitmask.h"
 #include "utils/mempool.h"
 #include "utils/network.h"
@@ -65,6 +66,7 @@ struct pg_vhost_state {
 	struct rte_mbuf *out[PG_MAX_PKTS_BURST];
 	rte_atomic64_t tx_bytes; /* TX: [vhost] --> VM */
 	rte_atomic64_t rx_bytes; /* RX: [vhost] <-- VM */
+	struct pg_limiter limiter;
 };
 
 /* head of the socket list */
@@ -143,8 +145,15 @@ static int vhost_poll(struct pg_brick *brick, uint16_t *pkts_cnt,
 	int ret;
 	struct rte_mbuf **in = state->in;
 	uint64_t rx_bytes = 0;
+	enum pg_limiter_action lr = pg_limiter_go(&state->limiter);
+
+	if (likely(lr == PG_LIMITER_WAIT)) {
+		*pkts_cnt = 0;
+		return 0;
+	}
 
 	*pkts_cnt = 0;
+
 	/* Try lock */
 	if (unlikely(!rte_atomic32_test_and_set(&state->allow_queuing)))
 		return 0;
@@ -165,6 +174,9 @@ static int vhost_poll(struct pg_brick *brick, uint16_t *pkts_cnt,
 		rx_bytes += rte_pktmbuf_pkt_len(in[i]);
 		pg_utils_guess_metadata(in[i]);
 	}
+
+	if (unlikely(lr & PG_LIMITER_UPDATE))
+		pg_limiter_update(&state->limiter, rx_bytes / count, 4, 0);
 
 	rte_atomic64_add(&state->rx_bytes, rx_bytes);
 
@@ -261,6 +273,8 @@ static int vhost_init(struct pg_brick *brick, struct pg_brick_config *config,
 	rte_atomic32_init(&state->allow_queuing);
 	rte_atomic32_set(&state->allow_queuing, 1);
 
+	pg_limiter_init(&state->limiter, 1468);
+	pg_limiter_update(&state->limiter, 1468, 4, 0);
 	return 0;
 }
 
