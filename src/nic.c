@@ -32,6 +32,7 @@
 #include "utils/bitmask.h"
 #include "utils/network.h"
 #include "nic-int.h"
+#include "limiter.h"
 
 #define NIC_ARGS_MAX_SIZE 1024
 #define TCP_PROTOCOL_NUMBER 6
@@ -49,6 +50,7 @@ struct pg_nic_state {
 	uint8_t portid;
 	/* side of the physical NIC/PMD */
 	enum pg_side output;
+	struct pg_limiter limiter;
 };
 
 struct headers_eth_ipv4_l4 {
@@ -244,16 +246,20 @@ static int nic_poll(struct pg_brick *brick, uint16_t *pkts_cnt,
 		pg_brick_get_state(brick, struct pg_nic_state);
 	struct rte_mbuf **pkts = state->pkts;
 
-	nb_pkts = rte_eth_rx_burst(state->portid, 0,
-				   state->pkts, PG_MAX_PKTS_BURST);
-	if (!nb_pkts) {
-		*pkts_cnt = 0;
-		return 0;
-	}
+	*pkts_cnt = 0;
 
+	if (likely(!pg_limiter_go(&state->limiter)))
+		return 0;
+
+	nb_pkts = rte_eth_rx_burst(state->portid, 0, pkts, PG_MAX_PKTS_BURST);
+	pg_limiter_update(&state->limiter, pkts, nb_pkts);
+
+	if (!nb_pkts)
+		return 0;
 
 	for (int i = 0; i < nb_pkts; i++)
 		pg_utils_guess_metadata(pkts[i]);
+
 	*pkts_cnt = nb_pkts;
 	return nic_poll_forward(state, brick, nb_pkts, errp);
 }
@@ -322,6 +328,7 @@ static int nic_init(struct pg_brick *brick, struct pg_brick_config *config,
 	struct pg_nic_state *state;
 	struct pg_nic_config *nic_config;
 	struct rte_eth_txq_info qinfo;
+	struct rte_eth_link link;
 	int ret;
 
 	state = pg_brick_get_state(brick, struct pg_nic_state);
@@ -356,6 +363,9 @@ static int nic_init(struct pg_brick *brick, struct pg_brick_config *config,
 		return -1;
 	}
 	rte_eth_promiscuous_enable(state->portid);
+
+	rte_eth_link_get(state->portid, &link);
+	pg_limiter_init(&state->limiter, 32, link.link_speed * 1e6);
 
 	/* check if nic supports offloading */
 	if (rte_eth_tx_queue_info_get(state->portid, 0, &qinfo) == 0 &&
