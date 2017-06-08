@@ -14,6 +14,10 @@
  * You should have received a copy of the GNU General Public License
  * along with Packetgraph.  If not, see <http://www.gnu.org/licenses/>.
  */
+
+#include <sys/sysinfo.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #include <glib.h>
 #include <rte_config.h>
 #include <rte_ether.h>
@@ -34,11 +38,15 @@ uint32_t pg_npf_nworkers = 1;
 
 struct ifnet;
 
+#define MAX_REGISTERED_THREADS 100
+
 struct pg_firewall_state {
 	struct pg_brick brick;
 	npf_t *npf;
 	struct ifnet *ifp;
 	GList *rules;
+	int registered_threads[MAX_REGISTERED_THREADS];
+	int registered_threads_size;
 };
 
 struct pg_firewall_config {
@@ -46,6 +54,33 @@ struct pg_firewall_config {
 };
 
 static uint64_t nb_firewall;
+
+static void register_thread(struct pg_firewall_state *state)
+{
+	int tid = syscall(SYS_gettid);
+	bool found = false;
+	int *t = state->registered_threads;
+	int size = state->registered_threads_size;
+
+	for (int i = 0; i < size; i++) {
+		if (tid == t[i]) {
+			found = true;
+			// move to front
+			if (i != 0) {
+				int first = t[0];
+				t[0] = t[i];
+				t[i] = first;
+			}
+			break;
+		}
+	}
+	if (!found && size < MAX_REGISTERED_THREADS) {
+		t[size] = tid;
+		state->registered_threads_size++;
+		npf_thread_register(state->npf);
+	}
+}
+#undef MAX_REGISTERED_THREADS
 
 static struct pg_brick_config *firewall_config_new(const char *name, int flags)
 {
@@ -64,6 +99,7 @@ void pg_firewall_gc(struct pg_brick *brick)
 
 	state = pg_brick_get_state(brick,
 				   struct pg_firewall_state);
+	register_thread(state);
 	npf_gc(state->npf);
 }
 
@@ -105,6 +141,7 @@ int pg_firewall_rule_add(struct pg_brick *brick, const char *filter,
 	int options = 0;
 
 	state = pg_brick_get_state(brick, struct pg_firewall_state);
+	register_thread(state);
 	options |= firewall_side_to_npf_rule(dir);
 	if (stateful)
 		options |= NPF_RULE_STATEFUL;
@@ -126,6 +163,7 @@ void pg_firewall_rule_flush(struct pg_brick *brick)
 	GList *it;
 
 	state = pg_brick_get_state(brick, struct pg_firewall_state);
+	register_thread(state);
 	/* clean all rules */
 	it = state->rules;
 	while (it) {
@@ -169,6 +207,7 @@ int pg_firewall_reload(struct pg_brick *brick, struct pg_error **errp)
 {
 	struct pg_firewall_state *state =
 		pg_brick_get_state(brick, struct pg_firewall_state);
+	register_thread(state);
 	return firewall_reload_internal(state, errp);
 }
 
@@ -200,6 +239,7 @@ static int firewall_burst(struct pg_brick *brick, enum pg_side from,
 	uint16_t ether_type;
 
 	state = pg_brick_get_state(brick, struct pg_firewall_state);
+	register_thread(state);
 	pf_side = FIREWALL_SIDE_TO_NPF(from);
 
 	it_mask = pkts_mask;
@@ -268,9 +308,10 @@ static int firewall_init(struct pg_brick *brick,
 		*errp = pg_error_new("fail to create npf");
 		return -1;
 	}
-	npf_thread_register(npf);
 	state->ifp = npf_dpdk_ifattach(npf, "firewall", firewall_iface_cnt++);
 	state->npf = npf;
+	state->registered_threads_size = 0;
+	register_thread(state);
 	state->rules = NULL;
 	++nb_firewall;
 	return firewall_reload_internal(state, errp);
@@ -281,6 +322,7 @@ static void firewall_destroy(struct pg_brick *brick,
 	struct pg_firewall_state *state;
 
 	state = pg_brick_get_state(brick, struct pg_firewall_state);
+	register_thread(state);
 	npf_dpdk_ifdetach(state->npf, state->ifp);
 	npf_destroy(state->npf);
 	pg_firewall_rule_flush(brick);
